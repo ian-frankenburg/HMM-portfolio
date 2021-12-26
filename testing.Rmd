@@ -1,0 +1,83 @@
+---
+title: "HMM testing"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+library(mvtnorm)
+p = 5
+N = 1000
+mu0 = rnorm(p,0,1)
+mu1 = rnorm(p,.5,1)
+
+Sigma0 = rWishart(1,p,diag(p))[,,1]
+Sigma1 = rWishart(1,p,diag(p))[,,1]
+
+P = matrix(c(.9,.1,.1,.9), 2, 2, byrow = 1)
+
+s0 <- 1 
+st <- function(i) sample(1:2,1,prob = P[i,])
+
+s <- st(s0)
+for(t in 2:N) {
+  s <- c(s,st(s[t-1]))
+}
+plot(s, pch = 19,cex = 0.5)
+x1 <- rmvnorm(N, mu0, Sigma0)
+x2 <- rmvnorm(N, mu1, Sigma1)
+x <- matrix(0, nrow=N, ncol = p)
+x[s==1,] <- x1[s==1,]
+x[s==2,] <- x2[s==2,]
+matplot(x, type="l")
+
+mu00 = matrix(0, p, 2)
+v00 = c(1,1)
+Sigma00 = 1*array(diag(p), dim=c(p,p,2))
+S00 = abind::abind(diag(p), diag(p), along = 3)
+
+RcppParallel::setThreadOptions(numThreads = 4)
+ptm <- Sys.time()
+r <- gibbs(niter=1000, burnin=500, num_chains = 4, y =  x, Sigma0 = Sigma00, v0=v00, mu0 = mu00, S0 = S00)
+(Sys.time() - ptm)
+
+apply(r$pr_save[[2]],1:2,quantile)
+
+for(i in 1:p){
+  hist(r$mu0_save[i,,], breaks=100, xlim=c(-5,5), col="darkred")
+  hist(r$mu1_save[i,,], breaks=100, xlim=c(-5,5), col="darkblue", add=T)
+  abline(v=mu0[i],col="gold",lwd=5)
+  abline(v=mu1[i],col="cyan",lwd=5)
+}
+apply(r$mu0_save, 1, quantile)
+apply(r$mu1_save, 1, quantile)
+
+matplot(apply(apply(r$filter[[1]],1:2,median),1,which.min)-1,type="l")
+plot(s-1,type="l")
+
+heatmap(cov2cor(Sigma0), Rowv = NA, Colv = NA)
+heatmap(cov2cor(apply(r$Sigma1_save[[1]],1:2,median)), Rowv = NA, Colv = NA)
+
+heatmap(cov2cor(Sigma1), Rowv = NA, Colv = NA)
+heatmap(cov2cor(apply(r$Sigma0_save[[1]],1:2,median)), Rowv = NA, Colv = NA)
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

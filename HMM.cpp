@@ -50,17 +50,25 @@ mat forward(const mat& y, const mat& mu, const cube& Sigma, const mat& pr, const
   return(filter);
 }
 
-std::tuple<vec, vec> backward(const mat& filter, const mat& pr)
+vec backward1(const mat& filter, const mat& pr)
 {
   int T = filter.n_rows;
   double pr0;
-  vec s(T, fill::zeros), n(4, fill::zeros);
+  vec s(T, fill::zeros);
   pr0 = filter(T-1, 0);
-  s(T-1) = (R::runif(0, 1) < pr0) ? 0 : 1;;
-  (s(T-1)==0) ? n(0)++: n(3)++;
+  s(T-1) = (R::runif(0, 1) < pr0) ? 0 : 1;
   for(int t = (T-2); t >= 0; t--){
     pr0 = pr(0,s(t+1))*filter(t, 0) / dot(pr.col(s(t+1)), filter.row(t));
     s(t) = (R::runif(0,1)<pr0) ? 0 : 1;
+  }
+  return(s);
+}
+
+vec backward2(const vec& s)
+{
+  int T = s.n_elem;
+  vec n(4, fill::zeros);
+  for(int t = (T-2); t >= 0; t--){
     if(s(t+1)==0 && s(t)==0){
       n(0)++;
     }else if(s(t+1)==1 && s(t)==0){
@@ -71,7 +79,7 @@ std::tuple<vec, vec> backward(const mat& filter, const mat& pr)
       n(3)++;
     }
   }
-  return(std::make_tuple(n, s));
+  return(n);
 }
 
 mat transition(const double& n00, const double& n10, const double& n01, const double& n11)
@@ -148,7 +156,6 @@ cube scale(const mat& y, const vec& s, const vec& v0, const mat& mu, const cube&
   return(S);
 }
 
-
 // [[Rcpp::export]]
 Rcpp::List gibbs(const uword& niter, const uword& burnin, const uword& num_chains,
                  const mat& y, const cube& Sigma0, const vec& v0,
@@ -165,17 +172,13 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const uword& num_chain
     pr_st.slice(c)(1,0) = 1-pr_st.slice(c)(1,1);
   }
   
-  mat n(num_chains, 4, fill::zeros), s(T, num_chains, fill::zeros);
+  mat n(4, num_chains, fill::zeros), s(T, num_chains, fill::zeros);
   vec marginal(T, fill::zeros);
   
   cube mu0_save(p, niter-burnin, num_chains, fill::zeros), mu1_save(p, niter-burnin, num_chains, fill::zeros);
 
-  std::vector<std::tuple<vec,vec>> back;
   cube pr(2, 2, num_chains, fill::zeros);
   for(int c=0; c<num_chains; c++){
-    back.push_back(
-      std::make_tuple(ones(4), ones(T))
-    );
     pr.slice(c) = pr_st.slice(c);
   }
   cube filter(T, 2, num_chains, fill::zeros), mu(p, 2, num_chains, fill::zeros);
@@ -200,11 +203,10 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const uword& num_chain
       // // step one: forward (discrete state Kalman) filter
       filter.slice(chain) = forward(y, mu.slice(chain), Sigma1(chain), pr.slice(chain), init0(chain));
       // // step two: backward sample
-      back[chain] = backward(filter.slice(chain), pr.slice(chain));
-      n.row(chain) = std::get<0>(back[chain]);
-      s.col(chain) = std::get<1>(back[chain]);
+      s.col(chain) = backward1(filter.slice(chain), pr.slice(chain));
+      n.col(chain) = backward2(s.col(chain));
       // // step three: sample transition parameters
-      pr.slice(chain) = transition(n(chain, 0), n(chain, 1), n(chain, 2), n(chain, 3));
+      pr.slice(chain) = transition(n(0, chain), n(1, chain), n(2, chain), n(3, chain));
       // // step four: sample mean and (co)variance parameters
       mu.slice(chain) = location(y, s.col(chain), mu0, Sigma0, Sigma1(chain));
       // // sample scale parameters
@@ -220,7 +222,7 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const uword& num_chain
       }
     }
   });
-  Rcpp::List out(5);
+  Rcpp::List out(6);
   out["filter"] = filter_save;
   out["mu0_save"] = mu0_save;
   out["mu1_save"] = mu1_save;

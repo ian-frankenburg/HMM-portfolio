@@ -28,3 +28,5 @@ for specified function arguments. To briefly explain the necessary priors
 - ```h``` is the desired forcast length for the posterior predictive distribution
 
 Further methodolical details are provided in the ```.Rmd``` files located in the ```test``` directory.
+
+

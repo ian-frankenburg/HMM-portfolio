@@ -27,7 +27,7 @@ prices <-
   reduce(merge) %>%
   `colnames<-`(symbols)
 
-prices_monthly <- to.monthly(prices, indexAt = "last", OHLC = FALSE)
+prices_monthly <- to.weekly(prices, indexAt = "last", OHLC = FALSE)
 asset_returns_xts <- na.omit(Return.calculate(prices_monthly, method = "log"))
 
 asset_returns_long <- 
@@ -37,6 +37,39 @@ asset_returns_long <-
   gather(asset, returns, -date) %>% 
   group_by(asset) %>%  
   mutate(returns = (log(returns) - log(lag(returns))))
+
+
+sampler = function(y){
+  r <- NULL
+  attempt <- 1
+  while( is.null(r) && attempt <= 3 ) {
+    attempt <- attempt + 1
+    try(
+       r <- gibbs(niter = 10000, burnin = 5000,
+                      y = y, Sigma0 = Sigma00, v0 = v00, mu0 = mu00, S0 = S00, h=10)
+    )
+  }
+  return(r)
+}
+y = apply(asset_returns_xts, 2, scale)
+y2 = y[1:(nrow(y)-10),]
+p = ncol(asset_returns_xts)
+mu00 = cbind(rep(0, p), rep(0, p))
+v00 = c(20, 20)
+Sigma00 = array(diag(p), dim=c(p,p,2))
+S00 = abind::abind(diag(p), diag(p), along = 3)
+ptm <- Sys.time(); fit = sampler(y2); print(Sys.time() - ptm)
+{
+apply(fit$pr_save, 1:2, mean)
+matplot(apply(fit$y_pred, 1:2, median),type="l")
+matplot(y[(nrow(y)-9):nrow(y),], type="l")
+regimes = apply(fit$S_save, 1, mean)
+par(mar=c(10,5,1,1))
+matplot(regimes,type="l", axes=F)
+matplot(1-regimes,type="l", axes=F, add=T, col="darkred")
+axis(2)
+axis(side=1,at=1:nrow(y),labels=rownames(as.data.frame(asset_returns_xts)), las=2)
+}
 ```
 
 https://rviews.rstudio.com/2017/10/11/from-asset-to-portfolio-returns/
@@ -63,24 +96,7 @@ From this predictive distribution, various optimization routines may be employed
 
 
 ```{r backtest}
-sampler = function(y){
-  r <- NULL
-  attempt <- 1
-  while( is.null(r) && attempt <= 25 ) {
-    attempt <- attempt + 1
-    try(
-       r <- gibbs(niter = 5000, burnin = 2500,
-                      y = y, Sigma0 = Sigma00, v0 = v00, mu0 = mu00, S0 = S00)
-    )
-  }
-  return(r)
-}
 
-p = ncol(asset_returns_xts)
-mu00 = cbind(rep(0, p), rep(0, p))
-v00 = c(15, 15)
-Sigma00 = array(diag(p), dim=c(p,p,2))
-S00 = abind::abind(diag(p), diag(p), along = 3)
 
 start = which(format(as.Date(rownames(as.data.frame(asset_returns_xts))), "%Y")=="2010")[1]
 forecast = nrow(y)-start

@@ -139,10 +139,39 @@ void scale(const mat& y, const vec& s, const vec& v0, const mat& mu, const cube&
   S = join_slices(W0,W1);
 }
 
+cube posterior_predictive_draws(const int niter, const int burnin, const int h, 
+                               const cube& pr_save, const mat& S_save,
+                               const mat& mu0_save, const mat& mu1_save, 
+                               const cube& Sigma0_save, const cube& Sigma1_save){
+  int sample = 0, p = mu0_save.n_rows, T = S_save.n_rows;
+  vec s_(h, fill::zeros);
+  cube y_pred(h, p, niter, fill::zeros);
+  for(int i=0; i<niter; i++){
+    sample = (int) Rcpp::runif(1, 0, niter-burnin)(0);
+    s_(0) = (S_save.col(sample)(T-1) == 0) ?
+    R::rbinom(1, pr_save.slice(sample)(0,0)): R::rbinom(1, pr_save.slice(sample)(1,1));
+    if(s_(0) == 0){
+      y_pred.slice(i).row(0) = rmvnorm(1, mu0_save.col(sample), Sigma0_save.slice(sample));
+    }else{
+      y_pred.slice(i).row(0) = rmvnorm(1, mu1_save.col(sample), Sigma1_save.slice(sample));
+    }
+    for(int j=1; j<h; j++){
+      s_(j) = (s_(j-1) == 0) ?
+      R::rbinom(1, pr_save.slice(sample)(0,0)): R::rbinom(1, pr_save.slice(sample)(1,1));
+      if(s_(j)==0){
+        y_pred.slice(i).row(j) = rmvnorm(1, mu0_save.col(sample), Sigma0_save.slice(sample));
+      }else{
+        y_pred.slice(i).row(j) = rmvnorm(1, mu1_save.col(sample), Sigma1_save.slice(sample));
+      }
+    }
+  }
+  return y_pred;
+}
+
 // [[Rcpp::export]]
 Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y, 
                  const cube& Sigma0, const vec& v0,
-                 const mat& mu0, const cube& S0)
+                 const mat& mu0, const cube& S0, const int& h)
 {
   uword T = y.n_rows;
   int p = y.n_cols;
@@ -151,7 +180,10 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
   mat filter(T, 2, fill::zeros), predict(T, 2, fill::zeros), likelihood(T, 2, fill::zeros), mu(p,2,fill::zeros);
   vec marginal(T, fill::zeros), s(T, fill::zeros), n(4, fill::zeros);
   
-  mat mu0_save(p, niter-burnin, fill::zeros), mu1_save(p, niter-burnin, fill::zeros), pr(2, 2, fill::zeros);
+  mat mu0_save(p, niter-burnin, fill::zeros), 
+  mu1_save(p, niter-burnin, fill::zeros), 
+  pr(2, 2, fill::zeros),
+  S_save(T, niter-burnin);
   pr(0, 0) = R::rbeta(0, 1);
   pr(0, 1) = 1 - pr(0, 0);
   pr(1, 1) = R::rbeta(0, 1);
@@ -161,6 +193,8 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
   filter_save(T, 2, niter-burnin, fill::zeros),
   pr_save(2, 2, niter-burnin, fill::zeros), S(p, p,2,fill::zeros);
   S.slice(0) = S.slice(1) = eye(p, p);
+  
+  cube y_pred(h, p, niter, fill::zeros);
   
   for(uword i=0; i < niter; i++){
     // // step one: forward filter
@@ -176,6 +210,7 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
     // // save MCMC draws after burnin period
     if(i >= burnin){
       filter_save.slice(i-burnin) = filter;
+      S_save.col(i-burnin) = s;
       pr_save.slice(i-burnin) = pr;
       mu0_save.col(i-burnin) = mu.col(0);
       mu1_save.col(i-burnin) = mu.col(1);
@@ -183,12 +218,18 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
       Sigma1_save.slice(i-burnin) = S.slice(1);
     }
   }
-  Rcpp::List out(6);
+  // draw from posterior predictive distribution
+  y_pred = posterior_predictive_draws(niter, burnin, h,
+                                     pr_save, S_save, mu0_save, mu1_save,
+                                     Sigma0_save, Sigma1_save);
+  Rcpp::List out(7);
   out["filter"] = filter_save;
   out["mu0_save"] = mu0_save;
   out["mu1_save"] = mu1_save;
   out["Sigma0_save"] = Sigma0_save;
   out["Sigma1_save"] = Sigma1_save;
   out["pr_save"] = pr_save;
+  out["S_save"] = S_save;
+  out["y_pred"] = y_pred;
   return(out);
 }

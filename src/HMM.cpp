@@ -146,14 +146,17 @@ cube posterior_predictive_draws(const int niter, const int burnin, const int h,
   int sample = 0, p = mu0_save.n_rows, T = S_save.n_rows;
   vec s_(h, fill::zeros);
   cube y_pred(h, p, niter, fill::zeros);
+  mat w(p, niter, fill::zeros);
   for(int i=0; i<niter; i++){
     sample = (int) Rcpp::runif(1, 0, niter-burnin)(0);
     s_(0) = (S_save.col(sample)(T-1) == 0) ?
     R::rbinom(1, pr_save.slice(sample)(0,0)): R::rbinom(1, pr_save.slice(sample)(1,1));
     if(s_(0) == 0){
       y_pred.slice(i).row(0) = rmvnorm(1, mu0_save.col(sample), Sigma0_save.slice(sample));
+      w.col(i) = inv(Sigma0_save.slice(sample)) * mu0_save.col(sample) / sum(inv(Sigma0_save.slice(sample)) * mu0_save.col(sample));
     }else{
       y_pred.slice(i).row(0) = rmvnorm(1, mu1_save.col(sample), Sigma1_save.slice(sample));
+      w.col(i) = inv(Sigma1_save.slice(sample)) * mu1_save.col(sample) / sum(inv(Sigma1_save.slice(sample)) * mu1_save.col(sample));
     }
     for(int j=1; j<h; j++){
       s_(j) = (s_(j-1) == 0) ?
@@ -168,10 +171,49 @@ cube posterior_predictive_draws(const int niter, const int burnin, const int h,
   return y_pred;
 }
 
+// feed in a vector of m, which contains the returns to construct the efficient frontier
+// use expressions on PG 384 to get portfolio weights for each resampled frontier
+mat weights(const int niter, const int burnin, const int h, 
+                                const cube& pr_save, const mat& S_save,
+                                const mat& mu0_save, const mat& mu1_save, 
+                                const cube& Sigma0_save, const cube& Sigma1_save, 
+                                const double nugget, const double m){
+  int sample = 0, p = mu0_save.n_rows, T = S_save.n_rows;
+  vec s_(h, fill::zeros);
+  mat w(p, niter, fill::zeros), Sig_inv(p, p, fill::ones);
+  vec one(p, fill::ones), mu(p, fill::zeros);
+  for(int i=0; i<niter; i++){
+    sample = (int) Rcpp::runif(1, 0, niter-burnin)(0);
+    s_(0) = (S_save.col(sample)(T-1) == 0) ?
+    R::rbinom(1, pr_save.slice(sample)(0,0)): R::rbinom(1, pr_save.slice(sample)(1,1));
+    if(s_(0) == 0){
+      Sig_inv = inv(Sigma0_save.slice(sample)+nugget*eye(p,p));
+      mu = mu0_save.col(sample);
+      // w.col(i) = inv(Sigma0_save.slice(sample)+nugget*eye(p,p)) * mu0_save.col(sample) / sum(inv(Sigma0_save.slice(sample)+nugget*eye(p,p)) * mu0_save.col(sample));
+      w.col(i) = Sig_inv * (m*as_scalar(one.t()*Sig_inv*one)*mu
+                              -as_scalar(mu.t()*Sig_inv*one)*mu
+                              + as_scalar(mu.t()*Sig_inv*mu)*one
+                              - m*as_scalar(mu.t()*Sig_inv*one)*one)
+                              / (dot(mu,Sig_inv*mu)*dot(one, Sig_inv*one) - dot(mu, Sig_inv*one)*dot(mu, Sig_inv*one));
+        
+    }else{
+      // w.col(i) = inv(Sigma1_save.slice(sample)+nugget*eye(p,p)) * mu1_save.col(sample) / sum(inv(Sigma1_save.slice(sample)+nugget*eye(p,p)) * mu1_save.col(sample));
+      Sig_inv = inv(Sigma1_save.slice(sample)+nugget*eye(p,p));
+      mu = mu1_save.col(sample);
+      w.col(i) = Sig_inv * (m*as_scalar(one.t()*Sig_inv*one)*mu
+                              -as_scalar(mu.t()*Sig_inv*one)*mu
+                              + as_scalar(mu.t()*Sig_inv*mu)*one
+                              - m*as_scalar(mu.t()*Sig_inv*one)*one)
+                              / (dot(mu,Sig_inv*mu)*dot(one, Sig_inv*one) - dot(mu, Sig_inv*one)*dot(mu, Sig_inv*one));
+    }
+  }
+  return w;
+}
+
 // [[Rcpp::export]]
 Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y, 
                  const cube& Sigma0, const vec& v0,
-                 const mat& mu0, const cube& S0, const int& h)
+                 const mat& mu0, const cube& S0, const int& h, const double nugget, const vec m)
 {
   uword T = y.n_rows;
   int p = y.n_cols;
@@ -195,6 +237,8 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
   S.slice(0) = S.slice(1) = eye(p, p);
   
   cube y_pred(h, p, niter, fill::zeros);
+  
+  cube w_save(p, niter, m.n_elem, fill::zeros);
   
   for(uword i=0; i < niter; i++){
     // // step one: forward filter
@@ -222,6 +266,11 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
   y_pred = posterior_predictive_draws(niter, burnin, h,
                                      pr_save, S_save, mu0_save, mu1_save,
                                      Sigma0_save, Sigma1_save);
+  
+  for(int i=0; i<m.n_elem; i++){
+    w_save.slice(i) = weights(niter, burnin, h, pr_save, S_save, mu0_save, mu1_save, Sigma0_save, Sigma1_save, nugget, m(i));
+  }
+  
   Rcpp::List out(7);
   out["filter"] = filter_save;
   out["mu0_save"] = mu0_save;
@@ -231,5 +280,7 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
   out["pr_save"] = pr_save;
   out["S_save"] = S_save;
   out["y_pred"] = y_pred;
+  out["pf_weights"] = w_save;
+  
   return(out);
 }

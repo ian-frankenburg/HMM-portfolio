@@ -38,14 +38,14 @@ asset_returns_long <-
   mutate(returns = (log(returns) - log(lag(returns))))
 
 
-sampler = function(y){
+sampler = function(y, nugget, m){
   r <- NULL
   attempt <- 1
   while( is.null(r) && attempt <= 3 ) {
     attempt <- attempt + 1
     try(
-       r <- gibbs(niter = 10000, burnin = 5000,
-                      y = y, Sigma0 = Sigma00, v0 = v00, mu0 = mu00, S0 = S00, h=10)
+       r <- gibbs(niter = 10000, burnin = 1000,
+                      y = y, Sigma0 = Sigma00, v0 = v00, mu0 = mu00, S0 = S00, h=1, nugget, m)
     )
   }
   return(r)
@@ -54,10 +54,30 @@ y = apply(asset_returns_xts, 2, scale)
 y2 = y[1:(nrow(y)-10),]
 p = ncol(asset_returns_xts)
 mu00 = cbind(rep(0, p), rep(0, p))
-v00 = c(20, 20)
+v00 = c(5,5)
 Sigma00 = array(diag(p), dim=c(p,p,2))
 S00 = abind::abind(diag(p), diag(p), along = 3)
-ptm <- Sys.time(); fit = sampler(y2); print(Sys.time() - ptm)
+m = c(0,.01,.025,.05,.1)
+ptm <- Sys.time(); fit = sampler(y,1e-3,m=m); print(Sys.time() - ptm)
+
+# axisLims = apply(fit$pf_weights, 3, density)
+for(i in 1:p){
+  # hist(fit$pf_weights[i,,1],probability = T, main=symbols[i], xlab="Weight", ylim=c(0,3), col=1,xlim=c(-5,5))
+  plot(density(fit$pf_weights[i,,1]), col = 1,type="l", lwd=1)
+  for(j in 2:length(m)){
+    # hist(fit$pf_weights[i,,j], probability = T, add=T, col=j)
+    lines(density(fit$pf_weights[i,,j]), col = j,type="l", lwd=1)
+  }
+  legend(2,2,legend = m,fill = 1:length(m),title = "Returns", cex=.75)
+}
+
+
+
+#only keep rows in dataframe that have values within 1.5*IQR of Q1 and Q3
+no_outliers <- subset(df, df$A> (Q1 - 1.5*IQR) & df$A< (Q3 + 1.5*IQR))
+
+min(fit$pf_weights)
+
 {
 apply(fit$pr_save, 1:2, mean)
 matplot(apply(fit$y_pred, 1:2, median),type="l")
@@ -90,8 +110,19 @@ The Monte Carlo sampling routine to draw from this distribution is as follows fr
 2. Draw $r_{T+1}^{(s)} \sim p(r_{T+1}|r_{1:T}, \Theta^{(s)}, S_{T+1}^{(s)})$
 3. Repeat 1-3 to form a collection of iid random draws from predictive density $p(r_{T+1}|r_{1:T})$
 
-From this predictive distribution, various optimization routines may be employed for portfolio allocation or counter factual scenarios considered based upon distributional quantiles.
+# Bayesian Simulation-based Resamped Frontier 
+These are early ideas, but consider how this extends the methodology [here](https://faculty.fuqua.duke.edu/~charvey/Research/Published_Papers/P95_Bayes_vs_Markowitz.pdf).
+Use the posterior predictive draw algorithm to form efficient frontier resampling. Based on the $S_{>T}$ series, make a draw from the appropriate regime and optimize with respect to those parameters!!! This provides a *Bayesian Resampled Frontier Approach with Hidden Markov Models*.
 
+From this predictive distribution, various optimization routines may be employed for portfolio allocation or counter factual scenarios considered based upon distributional quantiles. For example, say I have the posterior predictive distribution for $p(r_{T+1}|r_{1:T}$. Then following classical mean-variance optimization, the allocator seeks to solve the optimization problem
+$$
+\begin{align}
+\max_{\omega} & & \omega^\top\mu_{T+1}\\
+\text{subject to} &  &\omega^\top\Sigma_{T+1}\omega\leq\sigma^{2\star}\\
+\text{and} & & \omega^\top1  = 1
+\end{align}
+$$
+Bayesian simulation-based portfolio resampling I can form a Monte Carlo sample from 
 
 
 ```{r backtest}

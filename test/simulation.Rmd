@@ -248,7 +248,7 @@ Rcpp::List gibbs_parallel(const uword& niter, const uword& burnin, const uword& 
 
 ```{r}
 library(mvtnorm)
-p = 5
+p = 3
 N = 1000
 mu0 = rnorm(p,0,1)
 mu1 = rnorm(p,.5,1)
@@ -265,13 +265,18 @@ s <- st(s0)
 for(t in 2:N) {
   s <- c(s,st(s[t-1]))
 }
-plot(s, pch = 19,cex = 0.5)
+plot(s-1, pch = 19,cex = 0.5,col="grey",type="l", ylab="State", xlab="Time")
+points(which(s==1),s[s==1]-1, col="blue",pch=19, cex=.2)
+points(which(s==2),s[s==2]-1, col="red",pch=19, cex=.2)
+
 x1 <- rmvnorm(N, mu0, Sigma0)
 x2 <- rmvnorm(N, mu1, Sigma1)
 x <- matrix(0, nrow=N, ncol = p)
 x[s==1,] <- x1[s==1,]
 x[s==2,] <- x2[s==2,]
-matplot(x, type="l")
+matplot(x, type="l", lwd=.5, lty=1, xlab="Time", ylab="Outcome")
+legend(400, -6, legend = c("outcome 1", "outcome 2", "outcome 3"), col = 1:p, lty = 1, cex=.75)
+
 
 mu00 = matrix(0, p, 2)
 v00 = c(1,1)
@@ -280,10 +285,10 @@ S00 = abind::abind(diag(p), diag(p), along = 3)
 
 RcppParallel::setThreadOptions(numThreads = 4)
 ptm <- Sys.time()
-r <- gibbs_parallel(niter=50, burnin =25, num_chains = 4, y =  x, Sigma0 = Sigma00, v0=v00, mu0 = mu00, S0 = S00)
+r <- gibbs(niter=5000, burnin =2500, y = x, Sigma0 = Sigma00, v0=v00, mu0 = mu00, S0 = S00, h=10)
 (Sys.time() - ptm)
 
-apply(r$pr_save[[2]],1:2,quantile)
+apply(r$pr_save,1:2,quantile)
 
 for(i in 1:p){
   hist(r$mu0_save[i,,], breaks=100, xlim=c(-5,5), col="darkred")

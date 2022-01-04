@@ -1,4 +1,4 @@
-// #define ARMA_NO_DEBUG
+#define ARMA_NO_DEBUG
 #include <RcppDist.h>
 #include <RcppThread.h>
 // [[Rcpp::depends(RcppArmadillo, RcppDist, RcppThread)]]

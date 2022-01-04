@@ -248,7 +248,7 @@ Rcpp::List gibbs_parallel(const uword& niter, const uword& burnin, const uword& 
 
 ```{r}
 library(mvtnorm)
-p = 3
+p = 2
 N = 1000
 mu0 = rnorm(p,0,1)
 mu1 = rnorm(p,.5,1)
@@ -285,19 +285,32 @@ S00 = abind::abind(diag(p), diag(p), along = 3)
 
 RcppParallel::setThreadOptions(numThreads = 4)
 ptm <- Sys.time()
-r <- gibbs(niter=5000, burnin =2500, y = x, Sigma0 = Sigma00, v0=v00, mu0 = mu00, S0 = S00, h=10)
+r <- gibbs_parallel(niter=5000, burnin =2500,num_chains = 1, y = x, Sigma0 = Sigma00, v0=v00, mu0 = mu00, S0 = S00)
 (Sys.time() - ptm)
 
-apply(r$pr_save,1:2,quantile)
+apply(r$pr_save[[1]],1:2,quantile)
 
 for(i in 1:p){
-  hist(r$mu0_save[i,,], breaks=100, xlim=c(-5,5), col="darkred")
-  hist(r$mu1_save[i,,], breaks=100, xlim=c(-5,5), col="darkblue", add=T)
-  abline(v=mu0[i],col="gold",lwd=5)
-  abline(v=mu1[i],col="cyan",lwd=5)
+  hist(r$mu0_save[i,,], xlim=c(-5,5), col="darkred", main=paste("Estimated component of Mu"), xlab="x")
+  hist(r$mu1_save[i,,], xlim=c(-5,5), col="darkblue", main="Mu1", add=T)
+  abline(v=mu0[i],col="gold",lwd=2)
+  abline(v=mu1[i],col="cyan",lwd=2)
+  legend(2,200,legend=c("Regime 1 Estimate", "Regime 2 Estimate"), fill=c("darkred", "darkblue"), cex=.7)
+  legend(2,100,legend=c("Regime 1 Truth", "Regime 2 Truth"), fill=c("gold", "cyan"), cex=.7)
 }
-apply(r$mu0_save, 1, quantile)
-apply(r$mu1_save, 1, quantile)
+
+rgbcol = col2rgb("lightblue")/255
+plot(x=r$mu0_save[1,,], y=r$mu1_save[1,,], col=rgb(rgbcol[1], rgbcol[2], rgbcol[3], alpha = .1))
+points(x=mu0[1], y=mu1[1], pch=19)
+
+rgbcol = col2rgb("red")/255
+plot(x=r$mu0_save[2,,], y=r$mu1_save[2,,], col=rgb(rgbcol[1], rgbcol[2], rgbcol[3], alpha = .1))
+points(x=mu0[2], y=mu1[2], pch=19)
+
+mu1
+apply(r$mu0_save[,,1], 1, quantile)
+mu0
+apply(r$mu1_save[,,1], 1, quantile)
 
 matplot(apply(apply(r$filter[[1]],1:2,median),1,which.min)-1,type="l")
 plot(s-1,type="l")

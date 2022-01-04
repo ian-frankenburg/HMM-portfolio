@@ -336,3 +336,31 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
   out["risk"] = risk;
   return(out);
 }
+
+
+#include <Rcpp.h>
+#ifdef RCPP_USE_GLOBAL_ROSTREAM
+Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
+Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
+#endif
+
+// gibbs
+Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y, const cube& Sigma0, const vec& v0, const mat& mu0, const cube& S0, const int& h, const double nugget, const vec m);
+RcppExport SEXP sourceCpp_1_gibbs(SEXP niterSEXP, SEXP burninSEXP, SEXP ySEXP, SEXP Sigma0SEXP, SEXP v0SEXP, SEXP mu0SEXP, SEXP S0SEXP, SEXP hSEXP, SEXP nuggetSEXP, SEXP mSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const uword& >::type niter(niterSEXP);
+    Rcpp::traits::input_parameter< const uword& >::type burnin(burninSEXP);
+    Rcpp::traits::input_parameter< const mat& >::type y(ySEXP);
+    Rcpp::traits::input_parameter< const cube& >::type Sigma0(Sigma0SEXP);
+    Rcpp::traits::input_parameter< const vec& >::type v0(v0SEXP);
+    Rcpp::traits::input_parameter< const mat& >::type mu0(mu0SEXP);
+    Rcpp::traits::input_parameter< const cube& >::type S0(S0SEXP);
+    Rcpp::traits::input_parameter< const int& >::type h(hSEXP);
+    Rcpp::traits::input_parameter< const double >::type nugget(nuggetSEXP);
+    Rcpp::traits::input_parameter< const vec >::type m(mSEXP);
+    rcpp_result_gen = Rcpp::wrap(gibbs(niter, burnin, y, Sigma0, v0, mu0, S0, h, nugget, m));
+    return rcpp_result_gen;
+END_RCPP
+}

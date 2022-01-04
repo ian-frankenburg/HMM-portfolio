@@ -1,3 +1,15 @@
+---
+title: "A Bayesian Hidden Markov Model Approach to Resampled Frontiers"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{Rcpp gibbs, include=F, echo=F, cache=T}
 #define ARMA_NO_DEBUG
 #include <RcppDist.h>
 #include <RcppThread.h>
@@ -336,3 +348,240 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
   out["risk"] = risk;
   return(out);
 }
+```
+## Download Data
+In this brief case study, I apply my Bayesian Hidden Markov Model (HMM) implementation to an all-ETF portfolio allocation problem by proposing a novel resampled efficient frontier idea based upon the posterior predictive distribution of asset weights, arrived at through mean-variance optimization. The Bayesian HMM resampled frontier framework provides a coherent paradigm for incorporating both parameter estimation uncertainty and market regime uncertainty into the mean-variance optimization process. This is in contrast with the certainty equivalence principal of standard mean-variance optimization, whereby "plug-in" parameter estimates are used in the optimization routine which can lead to badly-leveraged portfolio weights due the inherent unaccounted uncertainties involved in the estimation process [2].
+
+To start, I'll download weekly return data for a basket of five ETFs: 
+
+1. S\&P 500
+2. EFA -- a non-US equities fund
+3. IJS -- a small-cap value fund
+4. EEM -- an emerging-markets fund
+5. AGG -- a fixed income bond fund.
+
+```{r warning=F, include=F}
+library(quantmod)
+library(PerformanceAnalytics)
+library(knitr)
+library(ggplot2)
+library(tidyverse)
+library(tidyquant)
+library(timetk)
+```
+
+```{r ETF, warning=F}
+symbols <- c("SPY","EFA", "IJS", "EEM","AGG")
+
+prices <- getSymbols(symbols, src = 'yahoo', from = "2005-01-01",
+             auto.assign = TRUE, warnings = FALSE) %>%
+  map(~Ad(get(.))) %>%
+  reduce(merge) %>%
+  `colnames<-`(symbols)
+
+prices_monthly <- to.weekly(prices, indexAt = "last", OHLC = FALSE)
+asset_returns_xts <- na.omit(Return.calculate(prices_monthly, method = "log"))
+```
+
+I'll visualize the collection of log-returns over time as follows
+```{r visual, fig.align="center"}
+matplot(asset_returns_xts[,], type="l", ylab="log-return", xlab="Week")
+legend(300,.2,legend = symbols[],fill = 1:length(symbols[]),title = "ETFs", cex=.7, horiz = T)
+```
+
+To reframe the problem formally, I seek to solve the optimization problem 
+$$
+\begin{equation}
+  \begin{aligned}
+  \min_{\omega} & & \omega^\top\Sigma_{T+\tau}\omega \\
+  \text{subject to} &  &\omega^\top\mu_{T+\tau}\geq\mu^{\star}\\
+  \text{and} & & \omega^\top1  = 1,
+  \end{aligned}
+\end{equation}
+$$
+which implies minimizing portfolio variance while ensuring returns of some level $\mu^\star$. I'll employ the posterior predictive distribution of the fitted HMM to obtain a probability distribution of estimates for plausible portfolio weights $\omega$ for the yet unrealized time period $T+\tau$, conditional only upon the return series up to time $T$. Sampling from the posterior predictive distribution is algorithmicly straightforward through Monte Carlo sampling as follows:
+
+1. Draw $\Theta^{(s)}, S_{1:T}^{(s)}\sim p(\Theta, S_{1:T}|r_{1:T})$
+2. Draw $S_{T+\tau}^{(s)}\sim p(S_{T+\tau}|S_T^{(s)}, \Theta^{(s)})$
+3. Solve (1) to draw from $\omega^{(s)}_{T+\tau}\sim p(\omega_{T+\tau}|r_{1:T},\Theta^{(s)}, S_{T+\tau}^{(s)})$ for a given $\mu^\star$
+4. Repeat 1-3 to form a collection of iid random draws from predictive density $p(\omega_{T+\tau}|r_{1:T})$
+
+```{r fit, cache=T}
+sampler = function(y, niter, burnin, mu0, Sigma0, v0, S0, m, nugget){
+  r <- NULL
+  attempt <- 1
+  while( is.null(r) && attempt <= 3 ) {
+    attempt <- attempt + 1
+    try(
+       r <- gibbs(niter = niter, burnin = burnin,
+                      y = y, Sigma0 = Sigma00, v0 = v0, mu0 = mu0, S0 = S0, h=1, nugget, m)
+    )
+  }
+  return(r)
+}
+```
+
+```{r include=F}
+y = apply(asset_returns_xts, 2, scale, scale=T, center=T)
+scales=locs=c()
+for(i in 1:ncol(y)){
+  scales[i]=attr(scale(asset_returns_xts[,i]), "scaled:scale")
+  locs[i]=attr(scale(asset_returns_xts[,i]), "scaled:center")
+}
+p = ncol(asset_returns_xts)
+mu00 = cbind(rep(0, p), rep(0, p))
+v00 = c(1,1)
+Sigma00 = array(diag(p), dim=c(p,p,2))
+S00 = abind::abind(diag(p), diag(p), along = 3)
+m = (c(0,.01,.025,.05,.1))
+ptm <- Sys.time();
+fit = sampler(y, niter=5000, burnin=1000,mu0=mu00,Sigma0=Sigma00,v0=v00,S0=S00,m=m,nugget=0); 
+print(Sys.time() - ptm)
+```
+
+```{r, echo=F, fig.align="center", fig.show="hold", out.width="60%"}
+a=seq(.8,.3,length.out = ncol(y)) 
+# par(mar = c(2, 3, 1, 1))
+for(i in 1:p){
+  rgbcol = col2rgb(1)/255
+  hist(fit$pf_weights[i,,1],probability = T, main=symbols[i], xlab="Weight",
+       col=rgb(rgbcol[1], rgbcol[2], rgbcol[3], alpha = a[1]),
+       ,xlim=c(-5,5), ylim=c(0,4), breaks=100)
+  lines(density(fit$pf_weights[i,,1]), col = 1,type="l", lwd=3)
+  for(j in 2:length(m)){
+    rgbcol = col2rgb(j)/255
+    hist(fit$pf_weights[i,,j],probability = T, xlab="Weight",
+     col=rgb(rgbcol[1], rgbcol[2], rgbcol[3], alpha = a[j]), breaks=100, add=T)
+    lines(density(fit$pf_weights[i,,j]), col = j, type="l", lwd=3)
+  }
+  legend(2,2,legend = round(m, 5) ,fill = 1:length(m), title = "Return Level", cex=.75)
+}
+
+# apply(fit$pr_save, 1:2, mean)
+# regimes = apply(fit$S_save, 1, mean)
+# par(mar=c(10,5,1,1))
+# matplot(regimes,type="l", axes=F, ylab="Regime Probability")
+# matplot(1-regimes,type="l", axes=F, add=T, col="darkred")
+# axis(2)
+# axis(side=1,at=1:nrow(y),labels=rownames(as.data.frame(asset_returns_xts)), las=2)
+
+# kable(cov2cor(apply(fit$Sigma0_save,1:2,median)), digits = 2, caption = "Correlation 1")
+# kable(cov2cor(apply(fit$Sigma1_save,1:2,median)), digits = 2, caption = "Correlation 2")
+```
+
+Additionally, through this predictive density on $p(\omega_{T+\tau}|r_{1:T})$, I can obtain distributions for perfance metrics such as, e.g., the Sharpe Ratio. Draws from this distribution $p(SR^{(s)}|r_{1:T})$ can be computed through
+$$
+SR^{(s)}:=\frac{\omega_{T+\tau}^{(s)\top}\mu_{T+\tau}}{\sqrt{\omega_{T+\tau}^{(s)\top}\Sigma_{T+\tau}\omega_{T+\tau}^{(s)}}}.
+$$
+
+Finally, the efficient frontier distribution can now be traced out for given values of $\mu^\star$ by then computing the portfolio risk $\sqrt{\omega_{T+\tau}^{(s)\top}\Sigma_{T+\tau}\omega_{T+\tau}^{(s)}}$ for a given sample $\omega_{T+\tau}^{(s)}$ from $p(\omega_{T+\tau}|r_{1:T})$.
+
+```{r}
+plot(y=m*scales+locs, x=apply(fit$risk,2,quantile,.5), col=1:length(m), pch=19,cex=2, main="Resampled Frontier")
+plot(y=m*scales+locs, x=apply(fit$risk,2,mean), col=1:length(m), pch=17, cex=2, main="Resampled Frontier")
+# temp=m*scales+locs
+# for(i in 1:ncol(fit$risk)){
+#   points(y=rep(temp[i], nrow(fit$risk)), fit$risk[,i], col=i, cex=.1)
+# }
+# points(y=m*scales+locs, x=apply(fit$risk,2,quantile,.5), col=1:length(m), pch=19,cex=2)
+# points(y=m*scales+locs, x=apply(fit$risk,2,quantile,.9), col=1:length(m), pch=19,cex=2)
+# lines(y=m*scales+locs, x=apply(fit$risk,2,mean),type="l")
+
+```
+
+
+# References 
+- [*Bayes vs. Resampling: A Rematch*](https://faculty.fuqua.duke.edu/~charvey/Research/Published_Papers/P95_Bayes_vs_Markowitz.pdf) - Harvey, Liechtyb and Liechtyc
+- [*Bayesian Methods in Finance*](https://www.wiley.com/en-us/Bayesian+Methods+in+Finance-p-9780470249246) - Rachev, Hsu, Bagasheva, and Fabozzi.
+- [*Finite Mixture and Markov Switching Models*](https://link.springer.com/content/pdf/10.1007%2F978-0-387-35768-3.pdf) - Sylvia Fruhwirth-Schnatter.
+
+
+<!-- https://rviews.rstudio.com/2017/10/11/from-asset-to-portfolio-returns/ -->
+
+<!-- Page 373 in *Finite Mixtures & Markov Swiching Models* to derive posterior predictive density. Then use this and apply page 101 in *Bayesian Methods in Finance* book to construct portfolio and efficient frontier. -->
+
+<!-- To form the posterior predictive distribution of next week's returns, I first work with the one-step-ahead predictive density -- a byproduct of the filter/smoothing updating equations. From this, I'll get the posterior predictive density (unconditional on model parameters) by integrating out $\Theta$ and the latent hidden state $S_{1:T}$. -->
+
+<!-- The posterior predictive density then becomes -->
+<!-- $$ -->
+<!-- \begin{align} -->
+<!-- p(r_{T+1}|r_{1:T}) &= \int p(r_{T+1}|r_{1:T}, \Theta, S_{1:T})d\Theta dS_{1:T}\\ -->
+<!-- \end{align} -->
+<!-- $$ -->
+<!-- The Monte Carlo sampling routine to draw from this distribution is as follows from section 12.4.2: -->
+
+<!-- 1. Draw $\Theta^{(s)}, S_{1:T}^{(s)}\sim p(\Theta, S_{1:T}|r_{1:T})$ -->
+<!-- 2. Draw $S_{T+1}\sim p(S_{T+1}|S_T^{(s)}, \Theta^{(s)})$ -->
+<!-- 2. Draw $r_{T+1}^{(s)} \sim p(r_{T+1}|r_{1:T}, \Theta^{(s)}, S_{T+1}^{(s)})$ -->
+<!-- 3. Repeat 1-3 to form a collection of iid random draws from predictive density $p(r_{T+1}|r_{1:T})$ -->
+
+<!-- # Bayesian Simulation-based Resamped Frontier  -->
+<!-- These are early ideas, but consider how this extends the methodology [here](https://faculty.fuqua.duke.edu/~charvey/Research/Published_Papers/P95_Bayes_vs_Markowitz.pdf). -->
+<!-- Use the posterior predictive draw algorithm to form efficient frontier resampling. Based on the $S_{>T}$ series, make a draw from the appropriate regime and optimize with respect to those parameters!!! This provides a *Bayesian Resampled Frontier Approach with Hidden Markov Models*. -->
+
+<!-- From this predictive distribution, various optimization routines may be employed for portfolio allocation or counter factual scenarios considered based upon distributional quantiles. For example, say I have the posterior predictive distribution for $p(r_{T+1}|r_{1:T}$. Then following classical mean-variance optimization, the allocator seeks to solve the optimization problem -->
+
+
+<!-- ```{r backtest, include=F, eval=F} -->
+<!-- start = which(format(as.Date(rownames(as.data.frame(asset_returns_xts))), "%Y")=="2010")[1] -->
+<!-- forecast = nrow(y)-start -->
+<!-- y_walking = y[1:start,] -->
+<!-- weights = matrix(0, nrow=ncol(y), ncol = nrow(y)) -->
+<!-- m = .05 -->
+<!-- for(j in 1:forecast){ -->
+<!--   fit = sampler(y_walking) -->
+<!--   # determine current regime -->
+<!--   regimes = apply(fit$filter, 1:2, mean) -->
+<!--   current_regime = which.max(regimes[nrow(regimes),]) -->
+
+<!--   if(current_regime==1){ -->
+<!--     mu = colMeans(fit$mu0_save) -->
+<!--     Sigma_t = apply(fit$Sigma0_save,1:2,mean) -->
+<!--   }else{ -->
+<!--     mu = colMeans(fit$mu1_save) -->
+<!--     Sigma_t = apply(fit$Sigma1_save,1:2,mean) -->
+<!--   } -->
+<!--   w = solve(Sigma_t) %*% (m*) -->
+<!--   # calculate weights based on current regime -->
+
+<!--   # calculate returns based on weights -->
+<!--   returns[j] = w %*% t(monthly[months[j],]) -->
+
+<!--   # save weight trajectories -->
+<!--   weights[,j] = w -->
+<!--   # jump one month ahead and refit HMM -->
+<!--   y_walking  = y[1:(start+j)] -->
+<!-- } -->
+
+<!-- y = apply(asset_returns_xts, 2, scale) -->
+<!-- { -->
+<!-- ptm <- Sys.time(); fit = sampler(y); print(Sys.time() - ptm) -->
+<!-- regimes = apply(fit$filter, 1:2, mean) -->
+<!-- par(mar=c(10,5,1,1)) -->
+<!-- matplot(regimes,type="l", axes=F) -->
+<!-- axis(2) -->
+<!-- axis(side=1,at=1:nrow(y),labels=rownames(as.data.frame(asset_returns_xts)), las=2) -->
+<!-- } -->
+<!-- plot(apply(regimes,1,which.max), type="l") -->
+
+
+<!-- rowMeans(fit$mu0_save) -->
+<!-- rowMeans(fit$mu1_save) -->
+
+<!-- matplot(apply(fit$filter, 1:2, median), type="l") -->
+
+<!-- heatmap(cov2cor(apply(fit$Sigma1_save,1:2,mean)), Rowv = NA, Colv = NA) -->
+<!-- heatmap(cov2cor(apply(fit$Sigma0_save,1:2,mean)), Rowv = NA, Colv = NA) -->
+
+<!-- for(i in 1:p){ -->
+<!--   hist(fit$mu0_save[i,], breaks=100, xlim=c(-5,5), col="darkred") -->
+<!--   hist(fit$mu1_save[i,], breaks=100, xlim=c(-5,5), col="darkblue", add=T) -->
+<!-- } -->
+<!-- plot(rowMeans(apply(fit$mu0_save, 1:2, mean)), pch=19, col="darkblue", ylim = c(-4,4)) -->
+<!-- points(apply(fit$mu0_save,1, quantile, .975), pch="-", col="darkblue") -->
+<!-- points(apply(fit$mu0_save,1, quantile, .025), pch="-", col="darkblue") -->
+
+<!-- points(rowMeans(apply(fit$mu1_save, 1:2, mean)), pch=19, col="darkred", ylim = c(-4,4)) -->
+<!-- points(apply(fit$mu1_save,1, quantile, .975), pch="-", col="darkred") -->
+<!-- points(apply(fit$mu1_save,1, quantile, .025), pch="-", col="darkred") -->
+<!-- ``` -->

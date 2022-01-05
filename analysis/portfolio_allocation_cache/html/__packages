@@ -1,4 +1,3 @@
-base
 zoo
 xts
 TTR
@@ -6,6 +5,7 @@ quantmod
 PerformanceAnalytics
 knitr
 ggplot2
+kableExtra
 tidyverse
 tibble
 tidyr

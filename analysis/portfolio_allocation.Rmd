@@ -1,5 +1,6 @@
 ---
-title: "A Bayesian Hidden Markov Model Approach to Resampled Frontiers"
+title: "A Bayesian Hidden Markov Model Approach to Portfolio Resampling"
+author: Ian Frankenburg
 output:
   html_document: default
   pdf_document: default
@@ -280,7 +281,7 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
 {
   uword T = y.n_rows;
   int p = y.n_cols;
-  double init0 = R::runif(0, 1);
+  double init0 = .5;
   
   mat filter(T, 2, fill::zeros), predict(T, 2, fill::zeros), likelihood(T, 2, fill::zeros), mu(p,2,fill::zeros);
   vec marginal(T, fill::zeros), s(T, fill::zeros), n(4, fill::zeros);
@@ -289,9 +290,9 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
   mu1_save(p, niter-burnin, fill::zeros), 
   pr(2, 2, fill::zeros),
   S_save(T, niter-burnin);
-  pr(0, 0) = R::rbeta(0, 1);
+  pr(0, 0) = R::rbeta(5, 1);
   pr(0, 1) = 1 - pr(0, 0);
-  pr(1, 1) = R::rbeta(0, 1);
+  pr(1, 1) = R::rbeta(5, 1);
   pr(1, 0) = 1 - pr(1, 1);
 
   cube Sigma0_save(p, p, niter-burnin, fill::zeros), Sigma1_save(p, p, niter-burnin, fill::zeros), 
@@ -349,8 +350,8 @@ Rcpp::List gibbs(const uword& niter, const uword& burnin, const mat& y,
   return(out);
 }
 ```
-## Download Data
-In this brief case study, I apply my Bayesian Hidden Markov Model (HMM) implementation to an all-ETF portfolio allocation problem by proposing a novel resampled efficient frontier idea based upon the posterior predictive distribution of asset weights, arrived at through mean-variance optimization. The Bayesian HMM resampled frontier framework provides a coherent paradigm for incorporating both parameter estimation uncertainty and market regime uncertainty into the mean-variance optimization process. This is in contrast with the certainty equivalence principal of standard mean-variance optimization, whereby "plug-in" parameter estimates are used in the optimization routine which can lead to badly-leveraged portfolio weights due the inherent unaccounted uncertainties involved in the estimation process [2].
+
+In this brief case study, I apply my Bayesian Hidden Markov Model (HMM) implementation to an all-ETF portfolio allocation problem. I propose a novel resampling approach based upon the posterior predictive distribution of asset weights, arrived at through mean-variance optimization. This case study was inspired through reading [1], where a Bayesian resampling approach to portfolio allocation was shown to outperform purely Monte Carlo-based resampling. The Bayesian HMM resampling framework provides a coherent paradigm for incorporating both parameter estimation uncertainty and market regime uncertainty into the mean-variance optimization process. This is in contrast with the "certainty equivalence" principal of standard mean-variance optimization, whereby "plug-in" parameter estimates are used in the optimization routine which can lead to badly-leveraged portfolio weights due the inherent uncertainties involved in the estimation process [2].
 
 To start, I'll download weekly return data for a basket of five ETFs: 
 
@@ -365,12 +366,14 @@ library(quantmod)
 library(PerformanceAnalytics)
 library(knitr)
 library(ggplot2)
+library(kableExtra)
 library(tidyverse)
 library(tidyquant)
 library(timetk)
+options("getSymbols.warning4.0"=FALSE)
 ```
 
-```{r ETF, warning=F}
+```{r ETF, warning=F, message=F, cache=F}
 symbols <- c("SPY","EFA", "IJS", "EEM","AGG")
 
 prices <- getSymbols(symbols, src = 'yahoo', from = "2005-01-01",
@@ -384,29 +387,41 @@ asset_returns_xts <- na.omit(Return.calculate(prices_monthly, method = "log"))
 ```
 
 I'll visualize the collection of log-returns over time as follows
-```{r visual, fig.align="center"}
-matplot(asset_returns_xts[,], type="l", ylab="log-return", xlab="Week")
-legend(300,.2,legend = symbols[],fill = 1:length(symbols[]),title = "ETFs", cex=.7, horiz = T)
+```{r visual, fig.align="center", cache=F, out.width = '75%'}
+matplot(asset_returns_xts, type="l", ylab="log-return", xlab="Week")
+legend(300,.2,legend = symbols,fill = 1:length(symbols),title = "ETFs", cex=.7, horiz = T)
 ```
-
-To reframe the problem formally, I seek to solve the optimization problem 
+A portfolio then consists of a weighted collection of these five ETFs. To reframe the problem formally, I seek to solve the optimization problem 
 $$
-\begin{equation}
   \begin{aligned}
   \min_{\omega} & & \omega^\top\Sigma_{T+\tau}\omega \\
   \text{subject to} &  &\omega^\top\mu_{T+\tau}\geq\mu^{\star}\\
-  \text{and} & & \omega^\top1  = 1,
+  \text{and} & & \omega^\top1  = 1.
   \end{aligned}
-\end{equation}
+  \qquad\qquad(1)
 $$
-which implies minimizing portfolio variance while ensuring returns of some level $\mu^\star$. I'll employ the posterior predictive distribution of the fitted HMM to obtain a probability distribution of estimates for plausible portfolio weights $\omega$ for the yet unrealized time period $T+\tau$, conditional only upon the return series up to time $T$. Sampling from the posterior predictive distribution is algorithmicly straightforward through Monte Carlo sampling as follows:
+In words, this implies minimizing portfolio variance while ensuring returns of some level $\mu^\star$. It can be shown through Lagrange multipliers [4] that for a given return level $\mu^\star$, the optimal $\omega$ is given as
+
+$$
+\omega=\Sigma_{T+\tau}^{-1}\Big[\frac{\mu^{\star}(1^\top\Sigma_{T+\tau}^{-1}1)\mu_{T+\tau}-(\mu_{T+\tau}^\top\Sigma_{T+\tau}^{-1}1)\mu_{T+\tau}+(\mu_{T+\tau}^\top\Sigma_{T+\tau}^{-1}\mu_{T+\tau})1-\mu^\star(\mu_{T+\tau}^\top\Sigma_{T+\tau}^{-1}1)1}{(\mu_{T+\tau}^\top\Sigma_{T+\tau}^{-1}\mu_{T+\tau})(1^\top\Sigma_{T+\tau}^{-1}1)-(\mu_{T+\tau}^\top\Sigma_{T+\tau}^{-1}1)^2}\Big]
+$$
+
+To address where the Hidden Markov Modeling comes into play, for simplicity, I'll assume two separate market regimes that determine the parameter estimates for $\mu_{T+\tau}$ and $\Sigma_{T+\tau}$. I'll call these market states VOL-ON and VOL-OFF. This Markov Chain can be visualized as
+
+```{r figure, echo=FALSE, out.width = '50%', fig.align='center'}
+knitr::include_graphics("../img/MC.png")
+```
+
+This very simple Markov chain defines a hidden dynamical system, of which my HMM implementation learns the structure, along with the parameters governing the Gaussian sampling distributions. I'll employ the posterior predictive distribution of the fitted HMM to obtain a probability distribution for plausible portfolio weights $\omega$ for the yet unrealized time period $T+\tau$. I'll also use draws from the posterior $p(\Theta|r_{1:T})$ to get estimates of $\Sigma_{T+\tau}$ and $\mu_{T+\tau}$ while accounting for estimation uncertainty and market regime uncertainty. Sampling from the posterior predictive distribution is algorithmically straightforward through Monte Carlo analysis as follows:
 
 1. Draw $\Theta^{(s)}, S_{1:T}^{(s)}\sim p(\Theta, S_{1:T}|r_{1:T})$
 2. Draw $S_{T+\tau}^{(s)}\sim p(S_{T+\tau}|S_T^{(s)}, \Theta^{(s)})$
-3. Solve (1) to draw from $\omega^{(s)}_{T+\tau}\sim p(\omega_{T+\tau}|r_{1:T},\Theta^{(s)}, S_{T+\tau}^{(s)})$ for a given $\mu^\star$
-4. Repeat 1-3 to form a collection of iid random draws from predictive density $p(\omega_{T+\tau}|r_{1:T})$
+3. Solve (1) to draw from $\omega^{(s)}_{T+\tau}\sim p(\omega_{T+\tau}|r_{1:T},\Theta^{(s)}, S_{T+\tau}^{(s)},\mu^\star)$ for a given $\mu^\star$
+4. Repeat 1-3 to form a collection of iid random draws from predictive density $p(\omega_{T+\tau}|r_{1:T}, \mu^\star)$
 
-```{r fit, cache=T}
+I'll write a short try-catch function call in R that calls the requisite C++ HMM code. This is useful because (rarely) a numerical error will occur in the sampling and result in a singular $\Sigma_{S_t}$ draw.
+
+```{r sampler, cache=F}
 sampler = function(y, niter, burnin, mu0, Sigma0, v0, S0, m, nugget){
   r <- NULL
   attempt <- 1
@@ -414,15 +429,15 @@ sampler = function(y, niter, burnin, mu0, Sigma0, v0, S0, m, nugget){
     attempt <- attempt + 1
     try(
        r <- gibbs(niter = niter, burnin = burnin,
-                      y = y, Sigma0 = Sigma00, v0 = v0, mu0 = mu0, S0 = S0, h=1, nugget, m)
+                      y=y, Sigma0=Sigma00, v0=v0, mu0=mu0, S0=S0, h=1, nugget, m)
     )
   }
   return(r)
 }
 ```
 
-```{r include=F}
-y = apply(asset_returns_xts, 2, scale, scale=T, center=T)
+```{r fitModel, echo=F, cache=T}
+y = apply(asset_returns_xts, 2, scale)
 scales=locs=c()
 for(i in 1:ncol(y)){
   scales[i]=attr(scale(asset_returns_xts[,i]), "scaled:scale")
@@ -434,17 +449,36 @@ v00 = c(2,2)
 Sigma00 = array(diag(p), dim=c(p,p,2))
 S00 = abind::abind(diag(p), diag(p), along = 3)
 m = (c(0,.01,.025,.05,.1))
-ptm <- Sys.time();
-fit = sampler(y, niter=5000, burnin=1000,mu0=mu00,Sigma0=Sigma00,v0=v00,S0=S00,m=m,nugget=1e-8); 
-print(Sys.time() - ptm)
+fit = sampler(y, niter=5000, burnin=1000,mu0=mu00,Sigma0=Sigma00,v0=v00,S0=S00,m=m,nugget=0); 
 ```
+
+Once the HMM is fit, I can visualize the distinct market regime probabilities as a sanity check. One regime is colored in red, the other black.
+
+```{r regimes, echo=F, out.width = '80%', fig.align='center'}
+regimes = apply(fit$S_save, 1, mean)
+par(mar=c(10,5,1,1))
+matplot(regimes,type="l", axes=F, ylab="Regime Probability")
+matplot(1-regimes,type="l", axes=F, add=T, col="darkred")
+axis(2)
+axis(side=1,at=1:nrow(y),labels=rownames(as.data.frame(asset_returns_xts)), las=2)
+```
+
+I can also investigate how the correlation structure changes with market regime.
+```{r cor, echo=F}
+t1 = (cov2cor(apply(fit$Sigma0_save,1:2,median)))#, digits = 2, caption = "Correlation Structure 1", col.names = symbols)
+t2 = (cov2cor(apply(fit$Sigma1_save,1:2,median)))#, digits = 2, caption = "Correlation Structure 2", col.names = symbols)
+knitr::kable(list(t1, t2), digits=2, col.names = symbols, caption = "Changing Correlation Structure")%>% kable_styling(latex_options = c("HOLD_position")) 
+```
+
+The following figures show the distribution for each element of $\omega$ for differing levels of $\mu^\star$. Intuitively, it generally appears that as a higher return is desired, the uncertainty about the optimal portfolio weight increases. However it's peculiar that the posterior for the $\color{green}{\textbf{green}}$ return level is most contracted!
+
 
 ```{r, echo=F, fig.align="center", fig.show="hold", out.width="60%"}
 a=seq(.8,.3, length.out = ncol(y)) 
 # par(mar = c(2, 3, 1, 1))
 for(i in 1:p){
   rgbcol = col2rgb(1)/255
-  hist(fit$pf_weights[i,,1],probability = T, main=symbols[i], xlab="Weight",
+  hist(fit$pf_weights[i,,1],probability = T, main=paste(symbols[i], "Weight Distribution"), xlab="Weight",
        col=rgb(rgbcol[1], rgbcol[2], rgbcol[3], alpha = a[1]),
        ,xlim=c(-5,5), ylim=c(0,4), breaks=100)
   lines(density(fit$pf_weights[i,,1]), col = 1,type="l", lwd=3)
@@ -458,42 +492,32 @@ for(i in 1:p){
 }
 
 # apply(fit$pr_save, 1:2, mean)
-# regimes = apply(fit$S_save, 1, mean)
-# par(mar=c(10,5,1,1))
-# matplot(regimes,type="l", axes=F, ylab="Regime Probability")
-# matplot(1-regimes,type="l", axes=F, add=T, col="darkred")
-# axis(2)
-# axis(side=1,at=1:nrow(y),labels=rownames(as.data.frame(asset_returns_xts)), las=2)
-
 # kable(cov2cor(apply(fit$Sigma0_save,1:2,median)), digits = 2, caption = "Correlation 1")
 # kable(cov2cor(apply(fit$Sigma1_save,1:2,median)), digits = 2, caption = "Correlation 2")
 ```
 
-Additionally, through this predictive density on $p(\omega_{T+\tau}|r_{1:T})$, I can obtain distributions for perfance metrics such as, e.g., the Sharpe Ratio. Draws from this distribution $p(SR^{(s)}|r_{1:T})$ can be computed through
+Additionally, through this predictive density on $p(\omega_{T+\tau}|r_{1:T})$, I can obtain distributions for performance metrics such as, e.g., the Sharpe Ratio. Draws from this distribution $p(SR|r_{1:T})$ can be computed through
 $$
-SR^{(s)}:=\frac{\omega_{T+\tau}^{(s)\top}\mu_{T+\tau}}{\sqrt{\omega_{T+\tau}^{(s)\top}\Sigma_{T+\tau}\omega_{T+\tau}^{(s)}}}.
+SR^{(s)}:=\frac{\omega_{T+\tau}^{(s)\top}\mu_{T+\tau}^{(s)}}{\sqrt{\omega_{T+\tau}^{(s)\top}\Sigma_{T+\tau}^{(s)}\omega_{T+\tau}^{(s)}}}.
 $$
 
-Finally, the efficient frontier distribution can now be traced out for given values of $\mu^\star$ by then computing the portfolio risk $\sqrt{\omega_{T+\tau}^{(s)\top}\Sigma_{T+\tau}\omega_{T+\tau}^{(s)}}$ for a given sample $\omega_{T+\tau}^{(s)}$ from $p(\omega_{T+\tau}|r_{1:T})$.
+Finally, the efficient frontier distribution can now be traced out for given values of $\mu^\star$ by computing the portfolio risk $\sqrt{\omega_{T+\tau}^{(s)\top}\Sigma_{T+\tau}\omega_{T+\tau}^{(s)}}$ for a given sample $\omega_{T+\tau}^{(s)}$ from $p(\omega_{T+\tau}|r_{1:T}, \mu^\star)$. Below displays the mean and median of a resampled frontier. Since the mean is larger than the median, this implies a right-skewness and tail risk involved in the weighting process.
 
-```{r}
+```{r, echo=F, fig.align="center", out.width="60%"}
 plot(y=(m*scales+locs)*100, x=apply(fit$risk,2,quantile,.5), col=1:length(m), pch=19,cex=2, main="Resampled Frontier", xlim=c(0.4, 1.3), ylab="% Return", xlab="Risk")
 points(y=(m*scales+locs)*100, x=apply(fit$risk,2,mean), col=1:length(m), pch=17, cex=2, main="Resampled Frontier")
-# temp=m*scales+locs
-# for(i in 1:ncol(fit$risk)){
-#   points(y=rep(temp[i], nrow(fit$risk)), fit$risk[,i], col=i, cex=.1)
-# }
-# points(y=m*scales+locs, x=apply(fit$risk,2,quantile,.5), col=1:length(m), pch=19,cex=2)
-# points(y=m*scales+locs, x=apply(fit$risk,2,quantile,.9), col=1:length(m), pch=19,cex=2)
-# lines(y=m*scales+locs, x=apply(fit$risk,2,mean),type="l")
-
+temp = (m*scales+locs)*100
+legend("center", legend=c("Median", "Mean"), pch=c(19,17))
 ```
+
+Again, it's apparent the desirable portfolio corresponds to $\color{green}{\textbf{green}}$ weighting.
 
 
 # References 
-- [*Bayes vs. Resampling: A Rematch*](https://faculty.fuqua.duke.edu/~charvey/Research/Published_Papers/P95_Bayes_vs_Markowitz.pdf) - Harvey, Liechtyb and Liechtyc
-- [*Bayesian Methods in Finance*](https://www.wiley.com/en-us/Bayesian+Methods+in+Finance-p-9780470249246) - Rachev, Hsu, Bagasheva, and Fabozzi.
-- [*Finite Mixture and Markov Switching Models*](https://link.springer.com/content/pdf/10.1007%2F978-0-387-35768-3.pdf) - Sylvia Fruhwirth-Schnatter.
+- [1] [*Bayes vs. Resampling: A Rematch*](https://faculty.fuqua.duke.edu/~charvey/Research/Published_Papers/P95_Bayes_vs_Markowitz.pdf) - Harvey, Liechtyb and Liechtyc
+- [2] [*Bayesian Methods in Finance*](https://www.wiley.com/en-us/Bayesian+Methods+in+Finance-p-9780470249246) - Rachev, Hsu, Bagasheva, and Fabozzi.
+- [3] [*Finite Mixture and Markov Switching Models*](https://link.springer.com/content/pdf/10.1007%2F978-0-387-35768-3.pdf) - Sylvia Fruhwirth-Schnatter.
+- [4] [*Bayesian Inference of State Space Models: Kalman Filtering and Beyond*](https://link.springer.com/book/10.1007/978-3-030-76124-0) - Kostas Triantafyllopoulos
 
 
 <!-- https://rviews.rstudio.com/2017/10/11/from-asset-to-portfolio-returns/ -->

@@ -2,8 +2,8 @@
 title: "A Bayesian Hidden Markov Model Approach to Portfolio Resampling"
 author: Ian Frankenburg
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -382,8 +382,8 @@ prices <- getSymbols(symbols, src = 'yahoo', from = "2005-01-01",
   reduce(merge) %>%
   `colnames<-`(symbols)
 
-prices_monthly <- to.weekly(prices, indexAt = "last", OHLC = FALSE)
-asset_returns_xts <- na.omit(Return.calculate(prices_monthly, method = "log"))
+prices_weekly <- to.weekly(prices, indexAt = "last", OHLC = FALSE)
+asset_returns_xts <- na.omit(Return.calculate(prices_weekly, method = "log"))
 ```
 
 I'll visualize the collection of log-returns over time as follows
